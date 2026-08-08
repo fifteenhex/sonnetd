@@ -9,6 +9,7 @@ COPTS=-ggdb \
 	-nostdlib \
 	-std=c99 \
 	-Os \
+	-I include \
 	-include $(NOLIBCDIR)/nolibc.h \
 	-Wl,--hash-style=gnu
 

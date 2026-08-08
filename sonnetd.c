@@ -1,3 +1,5 @@
+#include <linux/sonnet.h>
+
 static void usage(const char *argv0)
 {
 	printf("usage: %s -d <sonnet device> -k <kernel image> [-b <block backing file>]\n",
