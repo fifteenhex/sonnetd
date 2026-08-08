@@ -1,0 +1,23 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: fetch nolibc
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/torvalds/linux.git /tmp/linux
+          git -C /tmp/linux sparse-checkout set tools/include/nolibc
+
+      - name: build
+        run: make NOLIBCDIR=/tmp/linux/tools/include/nolibc
+
+      - name: run it
+        run: ./sonnetd
