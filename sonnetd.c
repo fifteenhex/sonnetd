@@ -1,11 +1,131 @@
 #include <linux/sonnet.h>
 
+static void cleanup_fd(int *_fd)
+{
+        int fd = *_fd;
+
+        if (fd >= 0)
+                close(fd);
+}
+
+#define __cleanup_fd __attribute__((cleanup(cleanup_fd)))
+
+static void cleanup_alloc(void **_buf)
+{
+        void *buf = *_buf;
+
+	free(buf);
+}
+
+#define __cleanup_alloc __attribute__((cleanup(cleanup_alloc)))
+
 #define EVENT_BATCH	16
 
 static void usage(const char *argv0)
 {
 	printf("usage: %s -d <sonnet device> -k <kernel image> [-b <block backing file>]\n",
 	       argv0);
+}
+
+static __u32 be32(__u32 v)
+{
+	const __u8 *p = (const __u8 *)&v;
+
+	return (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3];
+}
+
+static __u16 be16(__u16 v)
+{
+	const __u8 *p = (const __u8 *)&v;
+
+	return (p[0] << 8) | p[1];
+}
+
+/*
+ * Load a kernel image into *our* memory, this doesn't upload to the sonnet.
+ */
+static int load_kernel(const char *path, struct sonnet_boot *boot)
+{
+	void __cleanup_alloc *buf = NULL;
+	__u32 base = ~0U, top = 0;
+	int __cleanup_fd fd = -1;
+	__u8 *image = NULL;
+	Elf32_Ehdr eh;
+	Elf32_Phdr ph;
+	__u16 i;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		perror("open() kernel image failed");
+		return -1;
+	}
+
+	if (read(fd, &eh, sizeof(eh)) != sizeof(eh))
+		return -EIO;
+
+	if (memcmp(eh.e_ident, ELFMAG, SELFMAG) ||
+	    eh.e_ident[EI_CLASS] != ELFCLASS32 ||
+	    eh.e_ident[EI_DATA] != ELFDATA2MSB ||
+	    be16(eh.e_machine) != EM_PPC) {
+		printf("%s is not a big endian ppc32 ELF\n", path);
+		return -EINVAL;
+	}
+
+	/* one pass for the span, one to place the segments */
+	for (i = 0; i < be16(eh.e_phnum); i++) {
+		lseek(fd, be32(eh.e_phoff) + i * be16(eh.e_phentsize),
+		      SEEK_SET);
+
+		if (read(fd, &ph, sizeof(ph)) != sizeof(ph))
+			return -EIO;
+
+		if (be32(ph.p_type) != PT_LOAD)
+			continue;
+
+		if (be32(ph.p_paddr) < base)
+			base = be32(ph.p_paddr);
+
+		if (be32(ph.p_paddr) + be32(ph.p_filesz) > top)
+			top = be32(ph.p_paddr) + be32(ph.p_filesz);
+	}
+	if (base >= top) {
+		printf("%s has nothing to load\n", path);
+		return -EINVAL;
+	}
+
+	buf = malloc(top - base);
+	if (!buf)
+		return -ENOMEM;
+
+	memset(buf, 0, top - base);
+	image = (__u8*) buf;
+
+	for (i = 0; i < be16(eh.e_phnum); i++) {
+		lseek(fd, be32(eh.e_phoff) + i * be16(eh.e_phentsize),
+		      SEEK_SET);
+
+		if (read(fd, &ph, sizeof(ph)) != sizeof(ph))
+			return -EIO;
+
+		if (be32(ph.p_type) != PT_LOAD)
+			continue;
+
+		lseek(fd, be32(ph.p_offset), SEEK_SET);
+		if (read(fd, image + (be32(ph.p_paddr) - base),
+			 be32(ph.p_filesz)) != be32(ph.p_filesz))
+			return -EIO;
+	}
+
+	boot->image = (__u64)(unsigned long)image;
+	boot->len = top - base;
+	boot->load = base;
+	boot->entry = be32(eh.e_entry);
+	boot->arg = 0;
+
+	/* Don't clean up the buffer, we gonna use it */
+	buf = NULL;
+
+	return 0;
 }
 
 int main(int argc, char **argv, char **envp)
@@ -43,6 +163,9 @@ int main(int argc, char **argv, char **envp)
 		usage(argv[0]);
 		return 1;
 	}
+
+	if (load_kernel(kernel_image, &boot))
+		return 1;
 
 	fd = open(sonnet_dev, O_RDWR);
 	if (fd < 0) {
