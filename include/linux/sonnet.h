@@ -12,7 +12,9 @@
 
 struct sonnet_info {
 	__u32 version;
-	__u32 reserved[7];
+	/* Size of the blk pool region, this is the size you need to mmap() */
+	__u32 blk_pool_size;
+	__u32 reserved[6];
 };
 
 /*

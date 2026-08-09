@@ -140,6 +140,8 @@ int main(int argc, char **argv, char **envp)
 		.timeout_ms = 1000,
 	};
 	struct sonnet_boot boot = { 0 };
+	struct sonnet_info info;
+	void *blk_pool = NULL;
 	int fd, c;
 
 	while ((c = getopt(argc, argv, "d:k:b:")) != -1) {
@@ -171,6 +173,27 @@ int main(int argc, char **argv, char **envp)
 	if (fd < 0) {
 		perror("open sonnet device");
 		return 1;
+	}
+
+	if (ioctl(fd, SONNET_GET_INFO, &info) < 0) {
+		perror("SONNET_GET_INFO");
+		return 1;
+	}
+
+	if (info.version != SONNET_UAPI_VERSION) {
+		printf("Bad uapi version, forgot to update kernel?\n",
+		       info.version, SONNET_UAPI_VERSION);
+		return 1;
+	}
+
+	/* mmap() the blk pool */
+	if (info.blk_pool_size) {
+		blk_pool = mmap(NULL, info.blk_pool_size,
+				PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (blk_pool == MAP_FAILED) {
+			perror("mmap() failed");
+			return 1;
+		}
 	}
 
 	/* Put the card into a known state before booting anything. */
