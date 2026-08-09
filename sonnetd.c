@@ -128,6 +128,59 @@ static int load_kernel(const char *path, struct sonnet_boot *boot)
 	return 0;
 }
 
+static int blk_io(int fd, int op, void *buf, __u32 size, __u64 off)
+{
+	__u32 done = 0;
+	ssize_t r;
+
+	if (lseek(fd, off, SEEK_SET) < 0)
+		return -1;
+	while (done < size) {
+		if (op == SONNET_BLK_OP_READ)
+			r = read(fd, (__u8 *)buf + done, size - done);
+		else
+			r = write(fd, (__u8 *)buf + done, size - done);
+		if (r <= 0)
+			return -1;
+		done += r;
+	}
+	return 0;
+}
+
+static void service_blk(int fd, const int *blk_fd, void *blk_pool,
+			const struct sonnet_info *info,
+			const struct sonnet_boot *boot,
+			const struct sonnet_event *ev)
+{
+	struct sonnet_complete comp = {
+		.token = ev->blk.token,
+		.status = SONNET_STATUS_FAILED,
+	};
+
+	if (ev->blk.device >= boot->num_blk ||
+	    ev->blk.offset + ev->blk.size < ev->blk.offset ||
+	    ev->blk.offset + ev->blk.size > info->blk_pool_size)
+		goto complete;
+
+	switch (ev->blk.op) {
+	case SONNET_BLK_OP_READ:
+	case SONNET_BLK_OP_WRITE:
+		if (!blk_io(blk_fd[ev->blk.device], ev->blk.op,
+			    (__u8 *)blk_pool + ev->blk.offset, ev->blk.size,
+			    ev->blk.disk_offset))
+			comp.status = SONNET_STATUS_OK;
+		break;
+	case SONNET_BLK_OP_FLUSH:
+		if (!fsync(blk_fd[ev->blk.device]))
+			comp.status = SONNET_STATUS_OK;
+		break;
+	}
+
+complete:
+	if (ioctl(fd, SONNET_COMPLETE, &comp) < 0)
+		perror("SONNET_COMPLETE");
+}
+
 int main(int argc, char **argv, char **envp)
 {
 	const char *kernel_image = NULL;
@@ -142,6 +195,7 @@ int main(int argc, char **argv, char **envp)
 	struct sonnet_boot boot = { 0 };
 	struct sonnet_info info;
 	void *blk_pool = NULL;
+	int blk_fd[SONNET_BLK_MAX];
 	int fd, c;
 
 	while ((c = getopt(argc, argv, "d:k:b:")) != -1) {
@@ -173,7 +227,7 @@ int main(int argc, char **argv, char **envp)
 	if (load_kernel(kernel_image, &boot))
 		return 1;
 
-	/* Add in the block device info */
+	/* Add in the block device info, and open them for servicing */
 	for (c = 0; c < boot.num_blk; c++) {
 		struct stat st;
 
@@ -182,6 +236,11 @@ int main(int argc, char **argv, char **envp)
 			return 1;
 		}
 		boot.blk[c].size = st.st_size;
+		blk_fd[c] = open(block_source[c], O_RDWR);
+		if (blk_fd[c] < 0) {
+			perror("open block backing");
+			return 1;
+		}
 	}
 
 	fd = open(sonnet_dev, O_RDWR);
@@ -236,6 +295,10 @@ int main(int argc, char **argv, char **envp)
 			case SONNET_EV_STATE:
 				printf("card state now %u\n",
 				       events[i].new_state);
+				break;
+			case SONNET_EV_BLK:
+				service_blk(fd, blk_fd, blk_pool, &info,
+					    &boot, &events[i]);
 				break;
 			default:
 				printf("unknown event %u\n", events[i].type);

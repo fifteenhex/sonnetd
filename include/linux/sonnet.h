@@ -48,18 +48,41 @@ struct sonnet_boot {
  * Events that the kernel wants us to service
  */
 #define SONNET_EV_STATE		1
+#define SONNET_EV_BLK		2
+
+/* Userspace needs to fill the buffer */
+#define SONNET_BLK_OP_READ	0
+/* Userspace needs to write the buffer out */
+#define SONNET_BLK_OP_WRITE	1
+#define SONNET_BLK_OP_FLUSH	2
 
 struct sonnet_event {
 	__u16 type;
 	__u16 reserved[3];
 	union {
 		__u32 new_state;
+		/* Block IO request, completion needs to be reported */
+		struct {
+			__u64 disk_offset;
+			__u32 token;
+			__u32 offset;
+			__u32 size;
+			__u8 device;
+			__u8 op;
+			__u8 pad[2];
+		} blk;
 	};
 };
 
-/*
- * kernel -> sonnetd interface for virtio
- */
+#define SONNET_STATUS_OK	0
+#define SONNET_STATUS_FAILED	1
+
+struct sonnet_complete {
+	__u32 token;
+	__u32 status;
+};
+
+/* kernel -> sonnetd interface */
 struct sonnet_wait {
 	/* user pointer to an array of struct sonnet_event */
 	__u64 events;
@@ -74,5 +97,6 @@ struct sonnet_wait {
 #define SONNET_STOP		_IO(SONNET_IOC_MAGIC, 1)
 #define SONNET_BOOT		_IOW(SONNET_IOC_MAGIC, 2, struct sonnet_boot)
 #define SONNET_WAIT		_IOWR(SONNET_IOC_MAGIC, 3, struct sonnet_wait)
+#define SONNET_COMPLETE		_IOW(SONNET_IOC_MAGIC, 4, struct sonnet_complete)
 
 #endif /* _LINUX_SONNET_H */
