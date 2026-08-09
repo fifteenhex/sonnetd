@@ -17,6 +17,15 @@ struct sonnet_info {
 	__u32 reserved[6];
 };
 
+#define SONNET_BLK_MAX	4
+#define SONNET_BLK_F_RO	0x1
+
+struct sonnet_blk {
+	__u64 size;		/* bytes */
+	__u32 flags;
+	__u32 reserved;
+};
+
 /*
  * Image to load into sonnet DRAM and run.
  */
@@ -29,7 +38,10 @@ struct sonnet_boot {
 	__u32 entry;
 	/* placed into r3 before jumping into image, basically linux DTB pointer */
 	__u32 arg;
-	__u32 reserved[2];
+	/* block devices */
+	__u32 num_blk;
+	__u32 reserved;
+	struct sonnet_blk blk[SONNET_BLK_MAX];
 };
 
 /*

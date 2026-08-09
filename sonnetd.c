@@ -131,7 +131,7 @@ static int load_kernel(const char *path, struct sonnet_boot *boot)
 int main(int argc, char **argv, char **envp)
 {
 	const char *kernel_image = NULL;
-	const char *block_source = NULL;
+	const char *block_source[SONNET_BLK_MAX];
 	const char *sonnet_dev = NULL;
 	struct sonnet_event events[EVENT_BATCH];
 	struct sonnet_wait wait = {
@@ -153,7 +153,11 @@ int main(int argc, char **argv, char **envp)
 			kernel_image = optarg;
 			break;
 		case 'b':
-			block_source = optarg;
+			if (boot.num_blk == SONNET_BLK_MAX) {
+				printf("too many block devices\n");
+				return 1;
+			}
+			block_source[boot.num_blk++] = optarg;
 			break;
 		default:
 			usage(argv[0]);
@@ -168,6 +172,17 @@ int main(int argc, char **argv, char **envp)
 
 	if (load_kernel(kernel_image, &boot))
 		return 1;
+
+	/* Add in the block device info */
+	for (c = 0; c < boot.num_blk; c++) {
+		struct stat st;
+
+		if (stat(block_source[c], &st) < 0) {
+			perror("stat block backing");
+			return 1;
+		}
+		boot.blk[c].size = st.st_size;
+	}
 
 	fd = open(sonnet_dev, O_RDWR);
 	if (fd < 0) {
